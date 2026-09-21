@@ -1,0 +1,16 @@
+Notes on current design:
+
+BirdNET is a CNN which transforms a rolling 3 second snapshot into a spectogram. This spectogram is treated as an image and ran through a CNN which has 27 million parameters. Has an precision of .791 and an F0.5 Score of 0.414.
+
+Notes on this solution
+This solution does not isolate out the birdcall prior to image recognition. This is fine if sufficent data is available for training but under our usecase, a detection algorithm is likely required. They had 22,960 recordings to pull from
+
+Paper
+https://www.sciencedirect.com/science/article/pii/S1574954121000273?via%3Dihub
+
+Our architecture steps:
+
+1. Time based signal detection
+2. Snapshot signal in time
+3. produce spectogram (isolate signal in time frequency ideally). Must always be same length snapshot though
+4. Include a ML algorithm for further classification?
