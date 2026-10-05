@@ -6,8 +6,10 @@ from scipy.signal import butter, lfilter, freqz
 from scipy.fft import fft, fftshift
 from scipy.io import wavfile as wv
 import csv
-from os import listdir
-from os.path import isfile,join
+import zipfile
+import tempfile
+import shutil
+from pathlib import Path
 
 #Tuning Paramters
 burstDetectSNR = 3.0 #dB
@@ -15,10 +17,14 @@ pulseDetectSNR = 3.0 #dB
 fallingPulsePower = 3.0 #dB (how far below the pulse peak do we declare a pulse over)
 pulseIntegrationLength = 325 #Samples
 burstIntegrationLength = 5000 #Samples
+RECORDINGS_DIR='../Recordings/'
+csvFileName = "testCSV.csv"
+burtsHeader = ["Species","FileName","NumBursts","BurstIdx","BurstStart (s)","BurstDuration (s)","BurstPower (dB)","numPulses","PulseStartTimes (s)","PulseDurations (s)","pulsePeaks (dB)","pulsePower (dB)"]
+BURST_DATA = [burtsHeader]
 
 
 def openChirpFile(fileDir):
-    chirp_file = wave.open(fileDir,mode='rb')
+    chirp_file = wave.open(str(fileDir),mode='rb')
     return chirp_file
 
 def convert2Numpy(waveFile):
@@ -243,6 +249,10 @@ def detectBurstLocations(noisePower, minDetectSNR, samples, intLength, plotData=
     
     burstStarts = np.flatnonzero(starts)
     burstEnds = np.flatnonzero(~burstDetects[1:] & burstDetects[:-1])
+    if len(burstEnds) < len(burstStarts):
+        #Assume it continued to end of file
+        burstEnds = np.append(burstEnds,len(burstDetects)-1)
+    
     
     #Don't count any within the first 1000 samples
     if (any(burstStarts < 1000)):
@@ -347,13 +357,11 @@ def characterizePulses(burstSamples,pulseStarts,pulseEnds):
         pulsePowers.append(sum(burstSamples[pulseStarts[idx]:pulseEnds[idx]]))
     return (pulsePeaks,pulsePowers)
     
-
-if __name__ == '__main__':
-    testFile = '../Recordings/pennsylvanicus/pennsylvanicus/DQ150_250425_0111_bout1_1244s_1250s.wav'
-    minSNR = 3 #Detection power (dB)
-    csvFileName = "testCSV.csv"
-    
-    thisFile = openChirpFile(testFile)
+def processFile(speciesName,recordingFile):
+    global BURST_DATA
+    print(speciesName)
+    print(recordingFile)
+    thisFile = openChirpFile(recordingFile)
     fs = float(thisFile.getframerate())
 
     mySamples = convert2Numpy(thisFile)
@@ -363,13 +371,10 @@ if __name__ == '__main__':
     isoBands = isolateAllBands(thisFile,mySamples)
     outputSig = combineBandPower(isoBands)
     noisePower = calcNoisePower(outputSig)
-#
-#
+
     (numBursts,burstStarts,burstEnds) = detectBurstLocations(noisePower,burstDetectSNR, outputSig, burstIntegrationLength, plotData=False)
     burstSnippets = snippitizer(outputSig,burstStarts,burstEnds,thisFile.getframerate(),plotData=False)
     
-    burtsHeader = ["FileName","NumBursts","BurstIdx","BurstStart (s)","BurstDuration (s)","BurstPower (dB)","numPulses","PulseStartTimes (s)","PulseDurations (s)","pulsePeaks (dB)","pulsePower (dB)"]
-    burstData = [burtsHeader]
     
     
     for idx in range(0,len(burstSnippets)):
@@ -378,11 +383,63 @@ if __name__ == '__main__':
         (peakPowers,pulsePower) = characterizePulses(burstSnippets[idx],pulseStarts,pulseEnds)
         
         #Save CSV Data
-        burstData.append([testFile,numBursts,idx,burstStarts[idx]*(1/fs),(-burstStarts[idx]+burstEnds[idx])*(1/fs),10*np.log10(burstPower),numPulses,np.array(pulseStarts)*1/fs,np.array(pulseEnds)*1/fs,10*np.log10(peakPowers),10*np.log10(pulsePower)])
+        BURST_DATA.append([
+            speciesName,
+            recordingFile,
+            numBursts,
+            idx+1,
+            burstStarts[idx]*(1/fs),
+            (-burstStarts[idx]+burstEnds[idx])*(1/fs),
+            10*np.log10(burstPower),
+            numPulses,np.array(pulseStarts)*1/fs,
+            np.array(pulseEnds)*1/fs,
+            10*np.log10(peakPowers),
+            10*np.log10(pulsePower)
+        ])
         
+
+   
+   
+def iter_recordings(recordings_dir=RECORDINGS_DIR):
+
+    recordings_dir = Path(recordings_dir)
+
+    for zip_path in sorted(recordings_dir.glob("*.zip")):
+        species = zip_path.stem  # zip filename without ".zip"
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{species}_"))
+        
+        
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_dir)
+                for file_path in sorted(tmp_dir.rglob("*")):
+                    if (file_path.is_file()
+                        and file_path.suffix.lower() == ".wav"
+                        and "__MACOSX" not in file_path.parts
+                        and not file_path.name.startswith(".")):
+                            yield species, file_path
+
+            for file_path in sorted(tmp_dir.rglob("*")):
+                if file_path.is_file():
+                    yield species, file_path
+        finally:
+            # Runs after you've processed every file in this zip,
+            # or if your code raises an exception / you break out early.
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    
+    
+            
+
+if __name__ == '__main__':
+
+    for species, file_path in iter_recordings():
+        processFile(species, file_path)
+
     with open(csvFileName,'w',newline='') as csvFile:
         writer = csv.writer(csvFile, dialect='excel')
-        writer.writerows(burstData)
+        writer.writerows(BURST_DATA)
+    
     
 #    print("Num Bursts: ", numBursts)
 #    print("Burst Starts: ", burstStarts)
