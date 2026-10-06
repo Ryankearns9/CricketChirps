@@ -134,7 +134,8 @@ def removeDC(waveFile,samples):
 
     return samples_out
 
-
+def determineFreq(samples):
+    pass
 
 def plotTimeDomain(waveFile,samples):
     samplePeriod = 1/float(waveFile.getframerate())
@@ -419,10 +420,6 @@ def iter_recordings(recordings_dir=RECORDINGS_DIR):
                         and "__MACOSX" not in file_path.parts
                         and not file_path.name.startswith(".")):
                             yield species, file_path
-
-            for file_path in sorted(tmp_dir.rglob("*")):
-                if file_path.is_file():
-                    yield species, file_path
         finally:
             # Runs after you've processed every file in this zip,
             # or if your code raises an exception / you break out early.
