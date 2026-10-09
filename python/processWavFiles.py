@@ -13,14 +13,15 @@ from pathlib import Path
 import operator as op
 
 #Tuning Paramters
-burstDetectSNR = 4.0 #dB
-pulseDetectSNR = 3.0 #dB
+burstDetectSNR = 15.0 #dB
+pulseDetectSNR = 10.0 #dB
 fallingPulsePower = 3.0 #dB (how far below the pulse peak do we declare a pulse over)
 pulseIntegrationLength = 325 #Samples
 burstIntegrationLength = 4000 #Samples
 RECORDINGS_DIR='../Recordings/'
-#RECORDINGS_ZIP='../Recordings/longer_clips_forRyan.zip'
-RECORDINGS_ZIP='../Recordings/testRepo.zip'
+RECORDINGS_ZIP='../Recordings/longer_clips_forRyan.zip'
+TARGET_FILE='EP041_180331_0304_bout3_5860s_5988s.wav'
+# RECORDINGS_ZIP='../Recordings/testRepo.zip'
 csvFileName = "testCSV.csv"
 burtsHeader = [
     "Species",
@@ -91,7 +92,7 @@ def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
     y = lfilter(b, a, data)
     return y
 
-def getMainFreq(samples,fs):
+def getMainFreq(samples,fs,plotData=False):
     inputSignal = fft(samples)
     freqs = np.fft.fftfreq(len(samples), d=1/fs)
     searchFreqs = (freqs>1000) #Remove DC Bias
@@ -100,30 +101,44 @@ def getMainFreq(samples,fs):
         targetFreq = freqs[np.abs(inputSignal)==maxSig]
     else:
         targetFreq=[-1]
+
+    if plotData:
+        plotFreqDomain(fs,samples)
     return targetFreq[0]
 
 def isolateSignals(waveFile,samples):
+    HALF_BANDWIDTH = 500
+    fs = float(waveFile.getframerate())
     inputSignal = fft(samples)
-    freqs = np.fft.fftfreq(len(samples), d=1/waveFile.getframerate())
+    freqs = np.fft.fftfreq(len(samples), d=1/fs)
     searchFreqs_lower = (freqs>1000) & (freqs<10000)
     maxSig = max(np.abs(inputSignal[searchFreqs_lower]))
     targetFreq_lower = freqs[np.abs(inputSignal)==maxSig]
-    print("Lower frequency", targetFreq_lower[0])
+    # print("Lower frequency", targetFreq_lower[0])
 
     searchFreqs_upper = (freqs>10000)
     maxSig = max(np.abs(inputSignal[searchFreqs_upper]))
     targetFreq_upper = freqs[np.abs(inputSignal)==maxSig]
-    print("Upper frequency", targetFreq_upper[0])
+    # print("Upper frequency", targetFreq_upper[0])
 
 
 #    samples_lowerSig = mixSignal(waveFile,samples,-targetFreq_lower[0])
 #    samples_upperSig = mixSignal(waveFile,samples,-targetFreq_upper[0])
 #    samples_noise = mixSignal(waveFile,samples,-targetFreq_lower[0]-500)
     
-    print(targetFreq_lower)
-
-    samples_lowerSig = butter_bandpass_filter(samples, targetFreq_lower[0] - 300, targetFreq_lower[0] + 300,  waveFile.getframerate(), 6)
-    samples_upperSig = butter_bandpass_filter(samples, targetFreq_upper[0] - 300, targetFreq_upper[0] + 300, waveFile.getframerate(), 6)
+    # print(targetFreq_lower)
+    if (targetFreq_upper[0] + HALF_BANDWIDTH >= fs/2):
+        samples_lowerSig = ["error"]
+        samples_upperSig = ["error"]
+    else:
+        samples_lowerSig = butter_bandpass_filter(samples, 
+            targetFreq_lower[0] - HALF_BANDWIDTH, 
+            targetFreq_lower[0] + HALF_BANDWIDTH,  
+            waveFile.getframerate(), 6)
+        samples_upperSig = butter_bandpass_filter(samples, 
+            targetFreq_upper[0] - HALF_BANDWIDTH, 
+            targetFreq_upper[0] + HALF_BANDWIDTH, 
+            waveFile.getframerate(), 6)
     
     
 #    samples_noise = butter_lowpass_filter(samples_noise, 300, waveFile.getframerate(), 6)
@@ -198,24 +213,25 @@ def plotTimeDomainBands(waveFile,samples_lowerSig,samples_upperSig,noiseBand):
     # plt.plot(np.fft.fftshift(freqs),np.fft.fftshift(np.abs(inputSignal)))
     plt.show(block=True)
     
-def plotSamples(samples,samples2,samples3):
-
+def plotSamples(samples,samples2,samples3,noisePower):
+    noisePowerdB = 10*np.log10(np.abs(noisePower))
     plt.plot(10*np.log10(np.abs(samples)),label="Signal Power Data")
     plt.plot(10*np.log10(np.abs(samples2)),label="Moving Average Power")
     plt.plot(max(10*np.log10(np.abs(samples)))*samples3,label="Detected Location")
+    plt.plot([0,len(samples)],[noisePowerdB,noisePowerdB],label="Noise Power")
 
     plt.ylabel('Power [dB_lsb]')
     plt.xlabel('Sample Idx')
     plt.title('Pulse Isolation Algorithm')
-    plt.legend(loc="upper right")
+    plt.legend(loc="lower right")
     # plt.plot(np.fft.fftshift(freqs),np.fft.fftshift(np.abs(inputSignal)))
     plt.show(block=True)
 
-def plotSpectogram(waveFile,samples):
-    samplePeriod = 1/float(waveFile.getframerate())
+def plotSpectogram(fs,samples):
+    samplePeriod = 1/float(wfs)
     timeDomain = np.array(range(0, len(samples)))*samplePeriod
 
-    f, t, Sxx = sig.spectrogram(samples, fs=float(waveFile.getframerate()))
+    f, t, Sxx = sig.spectrogram(samples, fs=float(fs))
     mesh = plt.pcolormesh(t, f, Sxx, shading='gouraud')
     plt.ylabel('Frequency [Hz]')
     plt.xlabel('Time [sec]')
@@ -277,7 +293,7 @@ def detectBurstLocations(noisePower, minDetectSNR, samples, intLength, plotData=
     burstEnds = np.flatnonzero(~burstDetects[1:] & burstDetects[:-1])
     if len(burstEnds) < len(burstStarts):
         #Assume it continued to end of file
-        burstEnds = np.append(burstEnds,len(burstDetects)-1)
+        burstEnds = np.append(burstEnds,len(burstDetects))
     
     
     #Don't count any within the first 1000 samples
@@ -289,7 +305,7 @@ def detectBurstLocations(noisePower, minDetectSNR, samples, intLength, plotData=
             numBursts+=-1
             
     if plotData:
-        plotSamples(samples,outputBuffer,burstDetects)
+        plotSamples(samples,outputBuffer,burstDetects,noisePower)
         
     return (numBursts,burstStarts,burstEnds)
     
@@ -342,7 +358,7 @@ def detectPulseLocations(noisePower, minDetectSNR,fallingEdgePower, samples, int
         pulseDetects = np.zeros(len(outputBuffer))
         for idx in range(0,len(pulseStarts)):
             pulseDetects[pulseStarts[idx]:pulseEnds[idx]] = 1
-        plotSamples(samples,outputBuffer,pulseDetects)
+        plotSamples(samples,outputBuffer,pulseDetects,noisePower)
         
     return (numPulses,pulseStarts,pulseEnds)
     
@@ -394,23 +410,30 @@ def processFile(speciesName,speciesPopulation,recordingFile,cricketID):
 
     mySamples = convert2Numpy(thisFile)
     
-#    plotSpectogram(thisFile,mySamples)
-#    plotFreqDomain(thisFile.getframerate(),mySamples)
+    # plotSpectogram(thisFile.getframerate(),mySamples)
+    # plotFreqDomain(thisFile.getframerate(),mySamples)
     
-#    (lowerSamples,upperSamples) = isolateSignals(thisFile,mySamples)
+    (lowerSamples,upperSamples) = isolateSignals(thisFile,mySamples)
+    if lowerSamples[0] == "error" or upperSamples[0] == "error":
+        print("Error, frequency out of range")
+        return
 
-    isoBands = isolateAllBands(thisFile,mySamples)
-    outputSig = combineBandPower(isoBands)
+    # isoBands = isolateAllBands(thisFile,mySamples)
+    outputSig = combineBandPower([lowerSamples,upperSamples])
     noisePower = calcNoisePower(outputSig)
 
-    (numBursts,burstStarts,burstEnds) = detectBurstLocations(noisePower,burstDetectSNR, outputSig, burstIntegrationLength, plotData=False)
-    burstSnippets = snippitizer(outputSig,burstStarts,burstEnds,thisFile.getframerate(),plotData=False)
+    (numBursts,burstStarts,burstEnds) = detectBurstLocations(noisePower,burstDetectSNR, 
+        outputSig, burstIntegrationLength, plotData=False)
+    burstSnippets = snippitizer(outputSig,burstStarts,burstEnds,thisFile.getframerate(),plotData=True)
     
     idx = 0;
     badDetects = 0
     while (idx < len(burstSnippets)):
         #Switched to a while loop because we throw out bad detects now
-        (numPulses,pulseStarts,pulseEnds) = detectPulseLocations(noisePower, pulseDetectSNR,fallingPulsePower, burstSnippets[idx], pulseIntegrationLength, plotData=False)
+        numPulses = 0
+        if len(burstSnippets[idx]) >= 3:
+            (numPulses,pulseStarts,pulseEnds) = detectPulseLocations(noisePower, pulseDetectSNR,fallingPulsePower, 
+                burstSnippets[idx], pulseIntegrationLength, plotData=False)
         #Remove bad detects
         if (numPulses < 1) or (len(burstSnippets[idx])<3):
             numBursts-=1
@@ -420,7 +443,7 @@ def processFile(speciesName,speciesPopulation,recordingFile,cricketID):
             badDetects+=1
             continue
         burstPower = characterizeBursts(burstSnippets[idx])
-        burstFreq = getMainFreq(mySamples[burstStarts[idx]:burstEnds[idx]],fs)
+        burstFreq = getMainFreq(mySamples[burstStarts[idx]:burstEnds[idx]],fs,plotData=False)
 
         (peakPowers,pulsePower) = characterizePulses(burstSnippets[idx],pulseStarts,pulseEnds)
         
@@ -446,37 +469,11 @@ def processFile(speciesName,speciesPopulation,recordingFile,cricketID):
         idx+=1;
         
     #NumBursts may change every loop. Go back through and rewrite it
-    for idx in range(1,len(BURST_DATA)):
-        BURST_DATA[idx][numBurstCol] = numBursts
+    for idx in range(0,len(burstSnippets)):
+        BURST_DATA[-1-idx][numBurstCol] = numBursts
         
     print("Bad Burst Detects:", badDetects)
-   
-   
-def iter_recordings(recordings_dir=RECORDINGS_DIR):
 
-    recordings_dir = Path(recordings_dir)
-
-    for zip_path in sorted(recordings_dir.glob("*.zip")):
-        species = zip_path.stem  # zip filename without ".zip"
-        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{species}_"))
-        
-        
-
-        try:
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp_dir)
-                for file_path in sorted(tmp_dir.rglob("*")):
-                    if (file_path.is_file()
-                        and file_path.suffix.lower() == ".wav"
-                        and "__MACOSX" not in file_path.parts
-                        and not file_path.name.startswith(".")):
-                            (species,speciesPopulation,cricketID) = interpretFileName(file_path.name)
-                            yield species, speciesPopulation,file_path,cricketID
-        finally:
-            # Runs after you've processed every file in this zip,
-            # or if your code raises an exception / you break out early.
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-    
 def interpretFileName(fileName):
     fileParts = fileName.split('_')
     cricketID = fileParts[0]
@@ -513,10 +510,38 @@ def interpretFileName(fileName):
         hybrid = False
  
     speciesPopulation = ''.join([i for i in cricketID if not i.isdigit()])
-    return (species,speciesPopulation,cricketID)
+    return (species,speciesPopulation,cricketID)  
+   
+def iter_recordings(recordings_dir=RECORDINGS_DIR):
+    "Do all zip files in repo"
+    recordings_dir = Path(recordings_dir)
+
+    for zip_path in sorted(recordings_dir.glob("*.zip")):
+        species = zip_path.stem  # zip filename without ".zip"
+        tmp_dir = Path(tempfile.mkdtemp(prefix=f"{species}_"))
+        
+        
+
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(tmp_dir)
+                for file_path in sorted(tmp_dir.rglob("*")):
+                    if (file_path.is_file()
+                        and file_path.suffix.lower() == ".wav"
+                        and "__MACOSX" not in file_path.parts
+                        and not file_path.name.startswith(".")):
+                            (species,speciesPopulation,cricketID) = interpretFileName(file_path.name)
+                            yield species, speciesPopulation,file_path,cricketID
+        finally:
+            # Runs after you've processed every file in this zip,
+            # or if your code raises an exception / you break out early.
+            shutil.rmtree(tmp_dir, ignore_errors=True)
     
 
-def iter_target_recordings(recordings_zip=RECORDINGS_ZIP):
+    
+
+def iter_target_recordings(recordings_zip=RECORDINGS_ZIP, targetFile=''):
+    "Specific zip file. Optional argument of specific file within zip"
 
     recordings_zip = Path(recordings_zip)
     targetRepo = recordings_zip.stem  # zip filename without ".zip"
@@ -527,11 +552,16 @@ def iter_target_recordings(recordings_zip=RECORDINGS_ZIP):
     try:
         with zipfile.ZipFile(recordings_zip) as zf:
             zf.extractall(tmp_dir)
+            
             for file_path in sorted(tmp_dir.rglob("*")):
                 if (file_path.is_file()
                     and file_path.suffix.lower() == ".wav"
                     and "__MACOSX" not in file_path.parts
                     and not file_path.name.startswith(".")):
+                        if len(targetFile) > 1:
+                            if file_path.name != targetFile:
+                                continue
+
                         (species,speciesPopulation,cricketID) = interpretFileName(file_path.name)
                         yield species, speciesPopulation,file_path,cricketID
     finally:
@@ -541,7 +571,7 @@ def iter_target_recordings(recordings_zip=RECORDINGS_ZIP):
 
 if __name__ == '__main__':
 
-    for species, speciesPopulation,file_path,cricketID in iter_target_recordings():
+    for species, speciesPopulation,file_path,cricketID in iter_target_recordings(targetFile=TARGET_FILE):
         print(file_path)
         print(species)
         print(speciesPopulation)
